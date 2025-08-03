@@ -1,0 +1,7 @@
+2025-08-03 13:15:13,500 - INFO - 本地無有效 Cookie，執行登入程序。
+2025-08-03 13:15:13,617 - INFO - 正在嘗試登入，第 1/10 次...
+2025-08-03 13:15:20,205 - INFO - ddddocr 辨識結果: kmcl
+2025-08-03 13:15:23,328 - INFO - 登入成功！URL 已變更。
+2025-08-03 13:15:23,344 - INFO - Cookie 已成功儲存。
+2025-08-03 13:15:37,526 - ERROR - 獲取任務失敗: (20009, b'DB-Lib error message 20009, severity 9:\nUnable to connect: Adaptive Server is unavailable or does not exist (192.168.1.3)\nNet-Lib error during Unknown error (10060)\nDB-Lib error message 20009, severity 9:\nUnable to connect: Adaptive Server is unavailable or does not exist (192.168.1.3)\nNet-Lib error during Unknown error (10060)\n')
+2025-08-03 13:15:37,526 - INFO - 没有需要處理的資料。

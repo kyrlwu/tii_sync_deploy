@@ -1,0 +1,11 @@
+python_version <= 3.12
+os
+logging
+concurrent.futures
+pymssql
+requests
+time
+random
+typing
+playwright
+ddddocr==1.0.6
