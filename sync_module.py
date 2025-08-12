@@ -13,17 +13,41 @@ from dotenv import load_dotenv
 
 load_dotenv() # 載入 .env 檔案中的環境變數
 
-# --- 配置日誌 ---
+# --- 全域常數設定 (Global Constants) ---
+# 檔案相關
+COOKIE_FILE = 'tii_elearning_cookies.txt'
+LOG_FILE = 'sync.log'
+
+# URL 相關
+BASE_URL = 'https://elearning.tii.org.tw'
+LOGIN_URL = f'{BASE_URL}/edu/mpage/'
+API_URL = f'{BASE_URL}/moodle/company/ajax_list.php?api=complete_status_company_detail'
+
+# Playwright 相關 CSS 選擇器
+USERNAME_SELECTOR = '#username'
+PASSWORD_SELECTOR = '#password'
+CAPTCHA_IMG_SELECTOR = '#captcha_img'
+CAPTCHA_CODE_SELECTOR = '#captcha_code'
+SIGNIN_BUTTON_SELECTOR = '.btn-signin'
+ERROR_ALERT_SELECTOR = '.alert.alert-danger'
+
+# 執行緒與超時設定
+MAX_WORKERS = 5
+REQUEST_TIMEOUT = 30
+
+# --- 日誌設定 (Logging Configuration) ---
 log_file_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'sync.log')
+# 修改日誌設定，使其同時輸出到檔案和控制台
 logging.basicConfig(
     level=logging.INFO,
     format='%(asctime)s - %(levelname)s - %(message)s',
-    filename=log_file_path,
-    encoding='utf-8'
+    handlers=[
+        logging.FileHandler(log_file_path, encoding='utf-8'),
+        logging.StreamHandler() # 新增 StreamHandler 以輸出到控制台
+    ]
 )
 
-# --- Cookie 管理 ---
-COOKIE_FILE = 'tii_elearning_cookies.txt'
+
 
 def save_cookie(cookie_str: str):
     """將 Cookie 字串儲存到檔案"""
@@ -60,26 +84,25 @@ def _attempt_login(page, ocr, username, password) -> bool:
     :return: 是否成功
     """
     try:
-        login_url = 'https://elearning.tii.org.tw/edu/mpage/'
-        page.goto(login_url, timeout=60000)
+        page.goto(LOGIN_URL, timeout=60000)
 
-        page.fill('#username', username)
-        page.fill('#password', password)
+        page.fill(USERNAME_SELECTOR, username)
+        page.fill(PASSWORD_SELECTOR, password)
 
         # 處理驗證碼
-        captcha_element = page.query_selector('#captcha_img')
+        captcha_element = page.query_selector(CAPTCHA_IMG_SELECTOR)
         if not captcha_element:
             logging.error("找不到驗證碼圖片元素。")
             return False
         
         img_bytes = captcha_element.screenshot()
         captcha_text = ocr.classification(img_bytes)
-        logging.info(f"ddddocr 辨識結果: {captcha_text}")
+        logging.info(f"OCR 辨識結果: {captcha_text}")
 
-        page.fill('#captcha_code', captcha_text)
+        page.fill(CAPTCHA_CODE_SELECTOR, captcha_text)
 
         # 點擊登入並等待頁面導航
-        page.click('.btn-signin')
+        page.click(SIGNIN_BUTTON_SELECTOR)
 
         # 使用更可靠的方式判斷登入結果
         # 1. 等待 URL 變化 (成功)
@@ -94,7 +117,7 @@ def _attempt_login(page, ocr, username, password) -> bool:
             return True
         
         # 檢查是否有錯誤提示
-        error_element = page.query_selector('.alert.alert-danger')
+        error_element = page.query_selector(ERROR_ALERT_SELECTOR)
         if error_element:
             logging.warning(f"登入失敗: {error_element.inner_text()}")
         return False
@@ -102,7 +125,7 @@ def _attempt_login(page, ocr, username, password) -> bool:
         logging.warning("等待頁面載入超時，可能登入失敗或網路延遲。")
         return False
 
-# --- 新的登入邏輯 (Playwright + ddddocr) ---
+# --- 登入主函式 (Main Login Function) ---
 def login_and_save_cookie(max_attempts: int = 10) -> bool:
     """
     使用 Playwright 和 ddddocr 登入 TII eLearning 平台並儲存 Cookie。
@@ -111,7 +134,6 @@ def login_and_save_cookie(max_attempts: int = 10) -> bool:
     """
     username = os.environ.get('TII_USERNAME')
     password = os.environ.get('TII_PASSWORD')
-    login_url = 'https://elearning.tii.org.tw/edu/mpage/'
     ocr = ddddocr.DdddOcr()
 
     with sync_playwright() as p:
@@ -132,7 +154,7 @@ def login_and_save_cookie(max_attempts: int = 10) -> bool:
     logging.error("所有登入嘗試均失敗。")
     return False
 
-# --- 資料庫與 API 邏輯 (部分修改) ---
+# --- 核心同步邏輯 (Core Synchronization Logic) ---
 def sync_data(item: Dict, cookie_str: str) -> bool:
     """
     同步單條資料到資料庫
@@ -140,7 +162,6 @@ def sync_data(item: Dict, cookie_str: str) -> bool:
     :param cookie_str: 用於驗證的 Cookie
     :return: 是否同步成功
     """
-    url = 'https://elearning.tii.org.tw/moodle/company/ajax_list.php?api=complete_status_company_detail'
     headers = {
         'cookie': cookie_str,
         'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)'
@@ -148,14 +169,14 @@ def sync_data(item: Dict, cookie_str: str) -> bool:
 
     try:
         response = requests.post(
-            url,
+            API_URL,
             headers=headers,
             data={
                 'salesregid': item['salesregid'],
                 'finish_start_date': item['finish_start_date'],
                 'finish_end_date': item['finish_end_date']
             },
-            timeout=30
+            timeout=REQUEST_TIMEOUT
         )
         response.raise_for_status()
 
@@ -167,7 +188,7 @@ def sync_data(item: Dict, cookie_str: str) -> bool:
             return False
 
         if api_data['total'] == item['nTotalComplete']:
-            logging.info(f"資料未變化，跳過: {item['salesregid']}")
+            logging.info(f"資料未變化，跳過: {item['salesregid']} (數量: {api_data['total']})")
             return True
 
         with get_db_connection() as conn:
@@ -199,12 +220,11 @@ def get_db_connection():
     )
 
 def delete_details(cursor, item: Dict):
-    """批量刪除明细数据"""
+    """刪除指定條件的舊明細資料"""
     stmt = "DELETE FROM NYDB.AT.InsuExternalTrainingY WHERE cInsuLicense = %s AND dChgDate >= %s AND dChgDate <= %s"
     params = (item['salesregid'], item['dTrainBeginDate'], item['dTrainEndDate'])
     cursor.execute(stmt, params)
-    logging.info(f"已刪除明細紀錄: {item['salesregid']} 課程年月: {item['cClassYM']}")
-    print(f"已刪除明細紀錄: {item['salesregid']} 課程年月: {item['cClassYM']}")
+    logging.info(f"已刪除舊明細紀錄: {item['salesregid']} 課程年月: {item['cClassYM']}")
 
 def insert_details(cursor, item: Dict, rows: List[Dict]):
     """批量插入明细数据"""
@@ -219,17 +239,17 @@ def insert_details(cursor, item: Dict, rows: List[Dict]):
         (item['cClassYM'], item['salesregid'], item['salesregid'], row['fullname'], row['finish_time'])
         for row in rows
     ]
-    if not params: return
+    if not params:
+        logging.info(f"無新明細可新增: {item['salesregid']}")
+        return
     cursor.executemany(stmt, params)
-    logging.info(f"已新增 {len(params)} 條明細紀錄: {item['salesregid']} 課程年月: {item['cClassYM']}")
-    print(f"已新增 {len(params)} 條明細紀錄: {item['salesregid']} 課程年月: {item['cClassYM']}")
+    logging.info(f"已新增 {len(params)} 條新明細紀錄: {item['salesregid']} 課程年月: {item['cClassYM']}")
 
 def update_summary(cursor, item: Dict, total: int):
     """更新汇总数据"""
     stmt = "UPDATE NYDB.AT.InsuExternalTrainingX SET nTotalComplete = %s, dRefreshDate = GETDATE() WHERE cInsuLicense = %s AND dTrainBeginDate = %s AND dTrainEndDate = %s"
     cursor.execute(stmt, (total, item['salesregid'], item['dTrainBeginDate'], item['dTrainEndDate']))
-    logging.info(f"已更新匯總紀錄: {item['salesregid']} 課程年月: {item['cClassYM']}")
-    print(f"已更新匯總紀錄: {item['salesregid']} 課程年月: {item['cClassYM']}")
+    logging.info(f"已更新匯總紀錄: {item['salesregid']} 課程年月: {item['cClassYM']}，新總數: {total}")
 
 def fetch_tasks() -> List[Dict]:
     """从数据库获取待处理任务"""
@@ -268,7 +288,7 @@ def process_single_task(item: Dict, cookie_str: str) -> bool:
         logging.error(f"任務處理異常: {item['salesregid']} - {e}")
         return False
 
-# --- 主程序 (已修改) ---
+# --- 主執行程序 (Main Execution) ---
 def main():
     """主程序"""
     # 1. 檢查或獲取 Cookie
@@ -283,17 +303,17 @@ def main():
             logging.error("即使登入後也無法獲取 Cookie，程序終止。")
             return
 
-    # 2. 获取待处理数据
+    # 2. 獲取待處理資料
     tasks = fetch_tasks()
     if not tasks:
         logging.info("没有需要處理的資料。")
         return
 
-    # 3. 并发处理数据
+    # 3. 同步處理資料
     total = len(tasks)
     logging.info(f"開始處理 {total} 條資料")
     success_count = 0
-    with ThreadPoolExecutor(max_workers=5) as executor:
+    with ThreadPoolExecutor(max_workers=MAX_WORKERS) as executor:
         # 使用 lambda 將 cookie_str 傳遞給 process_single_task
         results = list(executor.map(lambda task: process_single_task(task, cookie_str), tasks))
     
