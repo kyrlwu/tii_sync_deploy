@@ -1,4 +1,3 @@
-python_version <= 3.12
 os
 logging
 concurrent.futures
@@ -8,4 +7,4 @@ time
 random
 typing
 playwright
-ddddocr==1.0.6
+ddddocr

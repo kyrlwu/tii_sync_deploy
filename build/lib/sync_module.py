@@ -9,9 +9,6 @@ import random
 from typing import List, Dict, Optional
 from playwright.sync_api import sync_playwright, TimeoutError as PlaywrightTimeoutError
 import ddddocr
-from dotenv import load_dotenv
-
-load_dotenv() # 載入 .env 檔案中的環境變數
 
 # --- 配置日誌 ---
 log_file_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'sync.log')
@@ -54,54 +51,6 @@ def clear_cookies():
         except OSError as e:
             logging.error(f"清除 Cookie 檔案時發生錯誤: {e}")
 
-def _attempt_login(page, ocr, username, password) -> bool:
-    """
-    執行單次登入嘗試。
-    :return: 是否成功
-    """
-    try:
-        login_url = 'https://elearning.tii.org.tw/edu/mpage/'
-        page.goto(login_url, timeout=60000)
-
-        page.fill('#username', username)
-        page.fill('#password', password)
-
-        # 處理驗證碼
-        captcha_element = page.query_selector('#captcha_img')
-        if not captcha_element:
-            logging.error("找不到驗證碼圖片元素。")
-            return False
-        
-        img_bytes = captcha_element.screenshot()
-        captcha_text = ocr.classification(img_bytes)
-        logging.info(f"ddddocr 辨識結果: {captcha_text}")
-
-        page.fill('#captcha_code', captcha_text)
-
-        # 點擊登入並等待頁面導航
-        page.click('.btn-signin')
-
-        # 使用更可靠的方式判斷登入結果
-        # 1. 等待 URL 變化 (成功)
-        # 2. 或者等待錯誤訊息出現 (失敗)
-        page.wait_for_load_state('networkidle', timeout=5000)
-
-        if "mpage" not in page.url:
-            logging.info("登入成功！URL 已變更。")
-            cookies = page.context.cookies()
-            cookie_str = '; '.join([f"{c['name']}={c['value']}" for c in cookies])
-            save_cookie(cookie_str)
-            return True
-        
-        # 檢查是否有錯誤提示
-        error_element = page.query_selector('.alert.alert-danger')
-        if error_element:
-            logging.warning(f"登入失敗: {error_element.inner_text()}")
-        return False
-    except PlaywrightTimeoutError:
-        logging.warning("等待頁面載入超時，可能登入失敗或網路延遲。")
-        return False
-
 # --- 新的登入邏輯 (Playwright + ddddocr) ---
 def login_and_save_cookie(max_attempts: int = 10) -> bool:
     """
@@ -109,25 +58,66 @@ def login_and_save_cookie(max_attempts: int = 10) -> bool:
     :param max_attempts: 最大嘗試次數
     :return: 是否登入成功
     """
-    username = os.environ.get('TII_USERNAME')
-    password = os.environ.get('TII_PASSWORD')
+    username = os.environ.get('TII_USERNAME', '12530314-A-2') # 建議使用環境變數
+    password = os.environ.get('TII_PASSWORD', 'ZD12530314') # 建議使用環境變數
     login_url = 'https://elearning.tii.org.tw/edu/mpage/'
     ocr = ddddocr.DdddOcr()
 
-    with sync_playwright() as p:
-        browser = p.chromium.launch(headless=True)
+    for attempt in range(max_attempts):
+        logging.info(f"正在嘗試登入，第 {attempt + 1}/{max_attempts} 次...")
         try:
-            for attempt in range(max_attempts):
-                logging.info(f"正在嘗試登入，第 {attempt + 1}/{max_attempts} 次...")
+            with sync_playwright() as p:
+                browser = p.chromium.launch(headless=True)
                 page = browser.new_page()
-                if _attempt_login(page, ocr, username, password):
-                    return True
-                page.close() # 關閉當前頁面，下次迴圈開新的
-                time.sleep(random.uniform(2, 4)) # 每次失敗後稍作等待
+                page.goto(login_url, timeout=60000)
+
+                page.fill('#username', username)
+                page.fill('#password', password)
+
+                # 處理驗證碼
+                captcha_element = page.query_selector('#captcha_img')
+                if not captcha_element:
+                    logging.error("找不到驗證碼圖片元素。")
+                    browser.close()
+                    continue
+                
+                captcha_path = 'captcha.png'
+                captcha_element.screenshot(path=captcha_path)
+
+                with open(captcha_path, 'rb') as f:
+                    img_bytes = f.read()
+                captcha_text = ocr.classification(img_bytes)
+                logging.info(f"ddddocr 辨識結果: {captcha_text}")
+
+                page.fill('#captcha_code', captcha_text)
+                page.click('.btn-signin')
+
+                # 檢查登入是否成功
+                try:
+                    # 如果出現 alert，表示驗證碼錯誤或帳密錯誤
+                    with page.expect_event('dialog', timeout=3000) as dialog_info:
+                        dialog = dialog_info.value
+                        logging.warning(f"登入失敗，彈出視窗: {dialog.message}")
+                        dialog.dismiss()
+                        browser.close()
+                        continue
+                except PlaywrightTimeoutError:
+                    # 沒有彈出視窗，檢查 URL 是否已變更
+                    if "mpage" not in page.url:
+                        logging.info("登入成功！URL 已變更。")
+                        cookies = page.context.cookies()
+                        cookie_str = '; '.join([f"{c['name']}={c['value']}" for c in cookies])
+                        save_cookie(cookie_str)
+                        browser.close()
+                        return True
+                    else:
+                        logging.warning("登入失敗，頁面未跳轉。")
+                        browser.close()
+                        continue
+
         except Exception as e:
             logging.error(f"登入過程中發生未知錯誤: {e}")
-        finally:
-            browser.close()
+            time.sleep(random.uniform(3, 5))
 
     logging.error("所有登入嘗試均失敗。")
     return False
@@ -155,7 +145,8 @@ def sync_data(item: Dict, cookie_str: str) -> bool:
                 'finish_start_date': item['finish_start_date'],
                 'finish_end_date': item['finish_end_date']
             },
-            timeout=30
+            timeout=30,
+            verify=False  # 忽略 SSL 憑證驗證
         )
         response.raise_for_status()
 
@@ -190,10 +181,10 @@ def sync_data(item: Dict, cookie_str: str) -> bool:
 def get_db_connection():
     """获取数据库连接"""
     return pymssql.connect(
-        server=os.environ.get('DB_SERVER'),
-        user=os.environ.get('DB_USER'),
-        password=os.environ.get('DB_PASSWORD'),
-        database=os.environ.get('DB_NAME'),
+        server='192.168.1.3',
+        user='apuser',
+        password='apuser',
+        database='NYDB',
         autocommit=True,
         timeout=60
     )
@@ -204,7 +195,6 @@ def delete_details(cursor, item: Dict):
     params = (item['salesregid'], item['dTrainBeginDate'], item['dTrainEndDate'])
     cursor.execute(stmt, params)
     logging.info(f"已刪除明細紀錄: {item['salesregid']} 課程年月: {item['cClassYM']}")
-    print(f"已刪除明細紀錄: {item['salesregid']} 課程年月: {item['cClassYM']}")
 
 def insert_details(cursor, item: Dict, rows: List[Dict]):
     """批量插入明细数据"""
@@ -222,14 +212,12 @@ def insert_details(cursor, item: Dict, rows: List[Dict]):
     if not params: return
     cursor.executemany(stmt, params)
     logging.info(f"已新增 {len(params)} 條明細紀錄: {item['salesregid']} 課程年月: {item['cClassYM']}")
-    print(f"已新增 {len(params)} 條明細紀錄: {item['salesregid']} 課程年月: {item['cClassYM']}")
 
 def update_summary(cursor, item: Dict, total: int):
     """更新汇总数据"""
     stmt = "UPDATE NYDB.AT.InsuExternalTrainingX SET nTotalComplete = %s, dRefreshDate = GETDATE() WHERE cInsuLicense = %s AND dTrainBeginDate = %s AND dTrainEndDate = %s"
     cursor.execute(stmt, (total, item['salesregid'], item['dTrainBeginDate'], item['dTrainEndDate']))
     logging.info(f"已更新匯總紀錄: {item['salesregid']} 課程年月: {item['cClassYM']}")
-    print(f"已更新匯總紀錄: {item['salesregid']} 課程年月: {item['cClassYM']}")
 
 def fetch_tasks() -> List[Dict]:
     """从数据库获取待处理任务"""

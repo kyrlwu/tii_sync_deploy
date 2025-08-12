@@ -1,0 +1,11 @@
+Metadata-Version: 2.4
+Name: tii-sync-deploy
+Version: 0.1.0
+Summary: Add your description here
+Requires-Python: >=3.11
+Description-Content-Type: text/markdown
+Requires-Dist: pymssql>=2.2.0
+Requires-Dist: requests>=2.25.0
+Requires-Dist: playwright
+Requires-Dist: ddddocr>=1.4.9
+Requires-Dist: python-dotenv>=1.0.0

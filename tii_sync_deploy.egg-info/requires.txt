@@ -1,0 +1,5 @@
+pymssql>=2.2.0
+requests>=2.25.0
+playwright
+ddddocr>=1.4.9
+python-dotenv>=1.0.0
