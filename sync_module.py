@@ -6,7 +6,7 @@ import pymssql
 import requests
 import time
 import random
-from typing import List, Dict, Optional
+from typing import List, Dict, Optional, Any
 from playwright.sync_api import sync_playwright, TimeoutError as PlaywrightTimeoutError
 import ddddocr
 from dotenv import load_dotenv
@@ -251,7 +251,7 @@ def update_summary(cursor, item: Dict, total: int):
     cursor.execute(stmt, (total, item['salesregid'], item['dTrainBeginDate'], item['dTrainEndDate']))
     logging.info(f"已更新匯總紀錄: {item['salesregid']} 課程年月: {item['cClassYM']}，新總數: {total}")
 
-def fetch_tasks() -> List[Dict]:
+def fetch_tasks() -> list[tuple[Any, ...]] | None | list[Any]:
     """从数据库获取待处理任务"""
     try:
         with get_db_connection() as conn:
@@ -312,7 +312,6 @@ def main():
     # 3. 同步處理資料
     total = len(tasks)
     logging.info(f"開始處理 {total} 條資料")
-    success_count = 0
     with ThreadPoolExecutor(max_workers=MAX_WORKERS) as executor:
         # 使用 lambda 將 cookie_str 傳遞給 process_single_task
         results = list(executor.map(lambda task: process_single_task(task, cookie_str), tasks))
